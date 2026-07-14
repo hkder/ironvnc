@@ -1,0 +1,16 @@
+# Build artifacts
+/target
+
+# Saved sessions (may contain hostnames and passwords) — never commit
+sessions.json
+**/sessions.json
+
+# Logs / scratch
+*.log
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/

@@ -1,0 +1,52 @@
+[package]
+name = "ironvnc"
+version = "0.1.0"
+edition = "2021"
+description = "IronVNC — a free, open-source VNC viewer written in Rust"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/hkder/ironvnc"
+readme = "README.md"
+keywords = ["vnc", "rfb", "remote-desktop", "viewer", "gui"]
+categories = ["network-programming", "gui"]
+
+[[bin]]
+name = "ironvnc"
+path = "src/main.rs"
+
+[dependencies]
+eframe = "0.31"
+egui = "0.31"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+thiserror = "2"
+flate2 = "1"
+des = "0.8"
+cipher = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+crossbeam-channel = "0.5"
+byteorder = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "5"
+arboard = "3"
+image = { version = "0.25", features = ["jpeg"] }
+# RA2 (RSA-AES) security type
+rsa = "0.9"
+eax = "0.5"
+aes = "0.8"
+sha1 = "0.10"
+sha2 = "0.10"
+rand = "0.8"
+# SFTP side-channel file transfer (MobaXterm-style remote browser).
+# Use the `ring` crypto backend, not the default aws-lc-rs (which needs NASM on Windows).
+russh = { version = "0.61", default-features = false, features = ["flate2", "ring", "rsa"] }
+russh-sftp = "2.3"
+rfd = "0.15"
+
+# RSA keygen is unusably slow with unoptimized bigint math; always optimize these.
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
+[profile.dev.package.rsa]
+opt-level = 3

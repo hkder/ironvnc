@@ -1,3 +1,9 @@
+// On Windows, release builds use the GUI subsystem so launching the app does
+// NOT pop up a console window. Debug builds keep the console so developers see
+// logs. CLI subcommands (--test, --sftp-test) still work when their output is
+// redirected to a file or pipe, which is how they're normally captured.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod app;
 mod connection;
 mod framebuffer;

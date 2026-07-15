@@ -13,6 +13,9 @@ categories = ["network-programming", "gui"]
 name = "ironvnc"
 path = "src/main.rs"
 
+[build-dependencies]
+winresource = "0.1"
+
 [dependencies]
 eframe = "0.31"
 egui = "0.31"

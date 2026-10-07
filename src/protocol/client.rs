@@ -60,6 +60,7 @@ impl VncClient {
         // --- Security (may replace the stream with an AES-encrypted channel) ---
         let mut stream = security::negotiate(
             stream,
+            params.username.as_deref(),
             params.password.as_deref(),
             rfb_minor,
             &event_tx,
@@ -153,9 +154,9 @@ impl VncClient {
                     VncCommand::SetClipboard(text) => {
                         send_client_cut_text(&mut stream, &text).await?;
                     }
-                    // ProvidePassword is only consumed during security negotiation;
+                    // ProvideCredentials is only consumed during security negotiation;
                     // ignore any stray commands that arrive after auth completes.
-                    VncCommand::ProvidePassword(_) => {}
+                    VncCommand::ProvideCredentials { .. } => {}
                 }
             }
 

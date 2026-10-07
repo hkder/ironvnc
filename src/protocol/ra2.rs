@@ -138,14 +138,18 @@ fn pad_be(bytes: Vec<u8>, len: usize) -> Vec<u8> {
 /// Returns the (client→server, server→client) channels for the caller to keep
 /// using — the SecurityResult and (for non-"ne" variants) the whole session
 /// flow through them.
-pub async fn handshake<S>(
+///
+/// `credentials` is called once the server has announced its credential
+/// subtype, with `true` when it wants a username as well as a password, and
+/// returns the `(username, password)` to send.
+pub async fn handshake<S, F>(
     stream: &mut S,
-    username: &str,
-    password: &str,
     sha256: bool,
+    credentials: F,
 ) -> Result<(Channel, Channel)>
 where
     S: AsyncRead + AsyncWrite + Unpin,
+    F: FnOnce(bool) -> Result<(String, String)>,
 {
     // --- 1. Server public key ---
     let server_bits = stream.read_u32().await?;
@@ -243,7 +247,9 @@ where
         }
     );
 
-    let user = if subtype == 2 { "" } else { username };
+    let needs_username = subtype != 2;
+    let (username, password) = credentials(needs_username)?;
+    let user = if needs_username { username.as_str() } else { "" };
     if user.len() > 255 || password.len() > 255 {
         bail!("RA2: username/password too long (max 255 bytes)");
     }

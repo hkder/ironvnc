@@ -20,13 +20,14 @@ pub const SECURITY_RA2NE_256: u8 = 130;
 /// raw TCP stream (buffered) for None/VncAuth/RA2ne, or an AES-EAX encrypted
 /// channel for RA2/RA2_256 (where the whole session is encrypted).
 ///
-/// If the server requires auth and no password was supplied, we send
-/// `VncEvent::NeedPassword` and block-wait on `cmd_rx` for a
-/// `VncCommand::ProvidePassword`.  This is safe because the VNC background
+/// If the server requires auth and the needed credentials were not supplied,
+/// we send `VncEvent::NeedPassword` and block-wait on `cmd_rx` for a
+/// `VncCommand::ProvideCredentials`.  This is safe because the VNC background
 /// thread is the only task on its single-threaded tokio runtime, and blocking
 /// it while waiting for user input is harmless.
 pub async fn negotiate(
     mut stream: TcpStream,
+    username: Option<&str>,
     password: Option<&str>,
     rfb_minor: u8,
     event_tx: &Sender<VncEvent>,
@@ -100,8 +101,10 @@ pub async fn negotiate(
             if encrypt_all { "full encryption" } else { "handshake only" },
         );
 
-        let pw = resolve_password(password, event_tx, cmd_rx)?;
-        let (send, recv) = ra2::handshake(&mut stream, "", &pw, sha256).await?;
+        let (send, recv) = ra2::handshake(&mut stream, sha256, |needs_username| {
+            resolve_credentials(username, password, needs_username, event_tx, cmd_rx)
+        })
+        .await?;
 
         if encrypt_all {
             // Everything from SecurityResult onward is inside the AES channel.
@@ -125,7 +128,7 @@ pub async fn negotiate(
 
     // --- Classic types over the plain stream ---
     if chosen == SECURITY_VNC_AUTH {
-        let pw = resolve_password(password, event_tx, cmd_rx)?;
+        let (_, pw) = resolve_credentials(None, password, false, event_tx, cmd_rx)?;
         vnc_auth(&mut stream, &pw).await?;
         did_vnc_auth = true;
     }
@@ -167,27 +170,39 @@ where
     Ok(())
 }
 
-/// Return the supplied password or ask the UI for one via the event/command channels.
+/// Return the supplied `(username, password)` or ask the UI for them via the
+/// event/command channels. The username is only required (and only prompted
+/// for) when `needs_username` is set; otherwise it is returned empty.
 ///
 /// Blocks the current (background) thread until the UI responds or times out.
-fn resolve_password(
+fn resolve_credentials(
+    username: Option<&str>,
     password: Option<&str>,
+    needs_username: bool,
     event_tx: &Sender<VncEvent>,
     cmd_rx: &Receiver<VncCommand>,
-) -> Result<String> {
+) -> Result<(String, String)> {
+    let username = if needs_username {
+        username.unwrap_or_default()
+    } else {
+        ""
+    };
     if let Some(pw) = password {
-        if !pw.is_empty() {
-            return Ok(pw.to_string());
+        if !pw.is_empty() && (!needs_username || !username.is_empty()) {
+            return Ok((username.to_string(), pw.to_string()));
         }
     }
 
-    // Tell the UI we need a password.
-    let _ = event_tx.send(VncEvent::NeedPassword);
+    // Tell the UI what we need.
+    let _ = event_tx.send(VncEvent::NeedPassword { needs_username });
 
-    // Block-wait for the UI to provide one (or for a disconnect command).
+    // Block-wait for the UI to provide it (or for a disconnect command).
     loop {
         match cmd_rx.recv_timeout(std::time::Duration::from_secs(120)) {
-            Ok(VncCommand::ProvidePassword(pw)) => return Ok(pw),
+            Ok(VncCommand::ProvideCredentials { username, password }) => {
+                let username = if needs_username { username } else { String::new() };
+                return Ok((username, password));
+            }
             Ok(VncCommand::Disconnect) => bail!("Disconnected by user"),
             Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
                 bail!("Timed out waiting for password");

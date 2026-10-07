@@ -17,6 +17,9 @@ pub struct VncApp {
 
     // Password dialog — only shown when server explicitly requests auth
     show_password_dialog: bool,
+    password_dialog_needs_username: bool,
+    password_dialog_focus: bool,
+    pending_username: String,
     pending_password: String,
 
     // Sessions popup window
@@ -26,6 +29,7 @@ pub struct VncApp {
     sf_name: String,
     sf_host: String,
     sf_port: String,
+    sf_username: String,
     sf_password: String,
     sf_editing: Option<usize>,
 
@@ -40,6 +44,7 @@ pub struct VncApp {
     // Active VNC connection details (for the SFTP side-channel + auto-save)
     current_host: String,
     current_port: u16,
+    current_username: String,
     current_password: String,
 
     // SFTP file-transfer panel (MobaXterm-style)
@@ -67,6 +72,9 @@ impl VncApp {
             desktop_name: String::new(),
             status_msg: "Not connected".to_string(),
             show_password_dialog: false,
+            password_dialog_needs_username: false,
+            password_dialog_focus: false,
+            pending_username: String::new(),
             pending_password: String::new(),
             show_sessions: false,
             sessions,
@@ -74,6 +82,7 @@ impl VncApp {
             sf_name: String::new(),
             sf_host: String::new(),
             sf_port: "5900".to_string(),
+            sf_username: String::new(),
             sf_password: String::new(),
             sf_editing: None,
             last_modifiers: Modifiers::default(),
@@ -82,6 +91,7 @@ impl VncApp {
             first_frame: true,
             current_host: String::new(),
             current_port: 5900,
+            current_username: String::new(),
             current_password: String::new(),
             transfer: None,
             show_transfer: false,
@@ -99,7 +109,7 @@ impl VncApp {
             } else {
                 format!("{}:{}", params.host, params.port)
             };
-            app.do_connect(params.host, params.port, params.password);
+            app.do_connect(params.host, params.port, params.username, params.password);
         }
 
         app
@@ -120,13 +130,20 @@ impl VncApp {
 
     /// Start a connection immediately — no pre-connect dialog.
     /// The server will tell us if it needs auth (via VncEvent::NeedPassword).
-    fn do_connect(&mut self, host: String, port: u16, password: Option<String>) {
+    fn do_connect(
+        &mut self,
+        host: String,
+        port: u16,
+        username: Option<String>,
+        password: Option<String>,
+    ) {
         self.status_msg = format!("Connecting to {}:{}…", host, port);
         self.desktop_name = String::new();
         self.show_password_dialog = false;
         self.pending_password.clear();
         self.current_host = host.clone();
         self.current_port = port;
+        self.current_username = username.clone().unwrap_or_default();
         self.current_password = password.clone().unwrap_or_default();
         // Remember the SSH username saved for this host, for the SFTP panel.
         self.ssh_user = self
@@ -138,6 +155,7 @@ impl VncApp {
         self.connection = Some(VncConnection::connect(ConnectionParams {
             host,
             port,
+            username,
             password,
         }));
     }
@@ -287,9 +305,17 @@ impl VncApp {
                         let _ = cb.set_text(text);
                     }
                 }
-                VncEvent::NeedPassword => {
-                    self.status_msg = "Waiting for password…".to_string();
+                VncEvent::NeedPassword { needs_username } => {
+                    self.status_msg = if needs_username {
+                        "Waiting for username and password…"
+                    } else {
+                        "Waiting for password…"
+                    }
+                    .to_string();
+                    self.pending_username = self.current_username.clone();
                     self.pending_password.clear();
+                    self.password_dialog_needs_username = needs_username;
+                    self.password_dialog_focus = true;
                     self.show_password_dialog = true;
                 }
                 VncEvent::Error(e) => {
@@ -610,21 +636,44 @@ impl VncApp {
             .anchor(egui::Align2::CENTER_CENTER, Vec2::ZERO)
             .show(ctx, |ui| {
                 ui.set_min_width(280.0);
-                ui.label("This server requires a password.");
+                let needs_username = self.password_dialog_needs_username;
+                ui.label(if needs_username {
+                    "This server requires a username and password."
+                } else {
+                    "This server requires a password."
+                });
                 ui.add_space(6.0);
 
-                ui.horizontal(|ui| {
-                    ui.label("Password:");
-                    let pw_resp = ui.add(
-                        egui::TextEdit::singleline(&mut self.pending_password)
-                            .password(true)
-                            .desired_width(180.0),
-                    );
-                    // Focus once on first show
-                    if !pw_resp.has_focus() && !pw_resp.gained_focus() {
-                        pw_resp.request_focus();
-                    }
-                });
+                egui::Grid::new("pw_dialog")
+                    .num_columns(2)
+                    .spacing([8.0, 4.0])
+                    .show(ui, |ui| {
+                        let mut user_resp = None;
+                        if needs_username {
+                            ui.label("Username:");
+                            user_resp = Some(ui.add(
+                                egui::TextEdit::singleline(&mut self.pending_username)
+                                    .desired_width(180.0),
+                            ));
+                            ui.end_row();
+                        }
+                        ui.label("Password:");
+                        let pw_resp = ui.add(
+                            egui::TextEdit::singleline(&mut self.pending_password)
+                                .password(true)
+                                .desired_width(180.0),
+                        );
+                        ui.end_row();
+
+                        // Focus once on first show: the username if it still
+                        // needs filling in, otherwise the password.
+                        if std::mem::take(&mut self.password_dialog_focus) {
+                            match user_resp {
+                                Some(u) if self.pending_username.is_empty() => u.request_focus(),
+                                _ => pw_resp.request_focus(),
+                            }
+                        }
+                    });
 
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
@@ -635,11 +684,15 @@ impl VncApp {
             });
 
         if wants_ok {
+            let user = self.pending_username.trim().to_string();
             let pw = self.pending_password.clone();
-            // Remember the password so a successful connect can be auto-saved.
+            // Remember the credentials so a successful connect can be auto-saved.
+            if self.password_dialog_needs_username {
+                self.current_username = user.clone();
+            }
             self.current_password = pw.clone();
             if let Some(conn) = &self.connection {
-                conn.provide_password(pw);
+                conn.provide_credentials(user, pw);
             }
             self.show_password_dialog = false;
             self.status_msg = "Authenticating…".to_string();
@@ -648,9 +701,9 @@ impl VncApp {
         }
     }
 
-    /// Persist the current connection (host/port/password) so relaunching or
-    /// reconnecting doesn't require re-entering it. Adds a new saved session or
-    /// updates the password on an existing one. Called once a connection is
+    /// Persist the current connection (host/port/username/password) so
+    /// relaunching or reconnecting doesn't require re-entering it. Adds a new
+    /// saved session or updates the credentials on an existing one. Called once a connection is
     /// established (so we never save a host that failed to connect).
     fn remember_session(&mut self) {
         if self.current_host.is_empty() {
@@ -658,6 +711,7 @@ impl VncApp {
         }
         let host = self.current_host.clone();
         let port = self.current_port;
+        let user = self.current_username.clone();
         let pw = self.current_password.clone();
 
         if let Some(s) = self
@@ -665,9 +719,17 @@ impl VncApp {
             .iter_mut()
             .find(|s| s.host == host && s.port == port)
         {
-            // Update a stored password only when we now have a (better) one.
+            // Update stored credentials only when we now have (better) ones.
+            let mut changed = false;
+            if !user.is_empty() && s.username != user {
+                s.username = user;
+                changed = true;
+            }
             if !pw.is_empty() && s.password != pw {
                 s.password = pw;
+                changed = true;
+            }
+            if changed {
                 let _ = sessions::save(&self.sessions);
             }
         } else {
@@ -675,6 +737,7 @@ impl VncApp {
                 name: String::new(),
                 host,
                 port,
+                username: user,
                 password: pw,
                 ssh_user: String::new(),
             });
@@ -736,6 +799,7 @@ impl VncApp {
                         self.sf_name.clear();
                         self.sf_host.clear();
                         self.sf_port = "5900".to_string();
+                        self.sf_username.clear();
                         self.sf_password.clear();
                         self.sf_editing = None;
                     }
@@ -762,6 +826,10 @@ impl VncApp {
                             egui::TextEdit::singleline(&mut self.sf_port)
                                 .desired_width(70.0),
                         );
+                        ui.end_row();
+                        ui.label("Username");
+                        ui.text_edit_singleline(&mut self.sf_username)
+                            .on_hover_text("Optional — only for servers that ask for one");
                         ui.end_row();
                         ui.label("Password");
                         ui.add(
@@ -796,6 +864,7 @@ impl VncApp {
                 self.sf_name = s.name.clone();
                 self.sf_host = s.host.clone();
                 self.sf_port = s.port.to_string();
+                self.sf_username = s.username.clone();
                 self.sf_password = s.password.clone();
                 self.sf_editing = Some(i);
             }
@@ -827,6 +896,7 @@ impl VncApp {
             name: self.sf_name.trim().to_string(),
             host: self.sf_host.trim().to_string(),
             port: self.sf_port.parse().unwrap_or(5900),
+            username: self.sf_username.trim().to_string(),
             password: self.sf_password.clone(),
             ssh_user,
         };

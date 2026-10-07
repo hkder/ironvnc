@@ -6,6 +6,8 @@ use std::thread;
 pub struct ConnectionParams {
     pub host: String,
     pub port: u16,
+    /// VNC username, for servers that ask for one (RA2 username+password).
+    pub username: Option<String>,
     pub password: Option<String>,
 }
 
@@ -27,8 +29,9 @@ pub enum VncEvent {
     DesktopName(String),
     /// Server sent clipboard text.
     ClipboardText(String),
-    /// Server requires VNC authentication — UI should prompt for password.
-    NeedPassword,
+    /// Server requires VNC authentication — UI should prompt for a password,
+    /// and also a username when `needs_username` is set.
+    NeedPassword { needs_username: bool },
     Error(String),
     Disconnected,
 }
@@ -39,8 +42,9 @@ pub enum VncCommand {
     PointerEvent { buttons: u8, x: u16, y: u16 },
     /// Send clipboard text to the server.
     SetClipboard(String),
-    /// Response to NeedPassword: provide the password to the waiting auth step.
-    ProvidePassword(String),
+    /// Response to NeedPassword: provide credentials to the waiting auth step.
+    /// `username` is ignored when the server did not ask for one.
+    ProvideCredentials { username: String, password: String },
     Disconnect,
 }
 
@@ -87,8 +91,10 @@ impl VncConnection {
         let _ = self.cmd_tx.send(VncCommand::SetClipboard(text));
     }
 
-    pub fn provide_password(&self, pw: String) {
-        let _ = self.cmd_tx.send(VncCommand::ProvidePassword(pw));
+    pub fn provide_credentials(&self, username: String, password: String) {
+        let _ = self
+            .cmd_tx
+            .send(VncCommand::ProvideCredentials { username, password });
     }
 
     pub fn disconnect(&self) {

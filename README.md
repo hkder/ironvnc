@@ -41,14 +41,16 @@ Or connect directly:
 ironvnc --host 192.168.1.50            # defaults to port 5900
 ironvnc --host 192.168.1.50 --port 5901
 ironvnc --session "My Desktop"          # open a saved session by name
+ironvnc --host 192.168.1.50 --username alice   # for servers that ask for a username
 ```
 
-If the server requires a password, IronVNC prompts for it in a popup and (on success) saves the session so you don't have to re-enter it. Saved sessions live in `sessions.json` **next to the executable** — the path is shown at the bottom of the session manager.
+If the server requires a password, IronVNC prompts for it in a popup and (on success) saves the session so you don't have to re-enter it. Servers using RA2 (RSA-AES) with username + password authentication, such as RealVNC Server with system authentication, also get a username field. You can prefill it with `--username` / `-U` or save it with the session. Saved sessions live in `sessions.json` **next to the executable** — the path is shown at the bottom of the session manager.
 
 ### Headless self-test
 
 ```bash
 ironvnc --test -H <host> -P <password>            # connect, verify a framebuffer decodes, exit
+ironvnc --test -H <host> -U <user> -P <password>  # same, for servers that need a username
 ironvnc --sftp-test -H <host> --user <u> -P <pw>  # verify SSH/SFTP connectivity
 ```
 

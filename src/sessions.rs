@@ -7,6 +7,9 @@ pub struct Session {
     pub name: String,
     pub host: String,
     pub port: u16,
+    /// VNC username (optional; only used by servers that ask for one).
+    #[serde(default)]
+    pub username: String,
     pub password: String,
     /// SSH username for the SFTP file-transfer panel (optional; remembered per host).
     #[serde(default)]

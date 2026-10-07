@@ -25,6 +25,11 @@ struct Args {
     #[arg(short, long, default_value_t = 5900)]
     port: u16,
 
+    /// VNC username (only for servers that ask for one, e.g. RealVNC with
+    /// system authentication)
+    #[arg(short = 'U', long)]
+    username: Option<String>,
+
     /// VNC password
     #[arg(short = 'P', long)]
     password: Option<String>,
@@ -60,7 +65,7 @@ fn main() -> Result<()> {
         let host = args
             .host
             .ok_or_else(|| anyhow::anyhow!("--test requires --host"))?;
-        return headless_test(host, args.port, args.password);
+        return headless_test(host, args.port, args.username, args.password);
     }
 
     if args.sftp_test {
@@ -75,8 +80,8 @@ fn main() -> Result<()> {
 
     // Resolve the initial connection. `--session <name>` opens a saved session
     // (used when launching a session in its own window). Otherwise `--host`;
-    // if no password was given, auto-load it from a saved session matching
-    // host:port so passwords never travel on the command line.
+    // if no username/password was given, auto-load it from a saved session
+    // matching host:port so passwords never travel on the command line.
     let initial_connection = if let Some(name) = args.session.clone() {
         sessions::load()
             .into_iter()
@@ -84,20 +89,30 @@ fn main() -> Result<()> {
             .map(|s| connection::ConnectionParams {
                 host: s.host,
                 port: s.port,
+                username: (!s.username.is_empty()).then_some(s.username),
                 password: (!s.password.is_empty()).then_some(s.password),
             })
     } else {
         args.host.clone().map(|host| {
+            let saved = sessions::load()
+                .into_iter()
+                .find(|s| s.host == host && s.port == args.port);
+            let username = args.username.clone().or_else(|| {
+                saved
+                    .as_ref()
+                    .map(|s| s.username.clone())
+                    .filter(|u| !u.is_empty())
+            });
             let password = args.password.clone().or_else(|| {
-                sessions::load()
-                    .into_iter()
-                    .find(|s| s.host == host && s.port == args.port)
-                    .map(|s| s.password)
+                saved
+                    .as_ref()
+                    .map(|s| s.password.clone())
                     .filter(|p| !p.is_empty())
             });
             connection::ConnectionParams {
                 host,
                 port: args.port,
+                username,
                 password,
             }
         })
@@ -166,7 +181,12 @@ fn sftp_test(host: String, user: String, password: String) -> Result<()> {
 /// Connect without a GUI, wait for the first framebuffer update, and report:
 /// desktop name/size and how much of the first frame is non-black (a fully
 /// black frame usually means a decode bug, not a working session).
-fn headless_test(host: String, port: u16, password: Option<String>) -> Result<()> {
+fn headless_test(
+    host: String,
+    port: u16,
+    username: Option<String>,
+    password: Option<String>,
+) -> Result<()> {
     use connection::{VncConnection, VncEvent};
     use std::time::{Duration, Instant};
 
@@ -174,6 +194,7 @@ fn headless_test(host: String, port: u16, password: Option<String>) -> Result<()
     let conn = VncConnection::connect(connection::ConnectionParams {
         host,
         port,
+        username,
         password,
     });
 
@@ -197,8 +218,15 @@ fn headless_test(host: String, port: u16, password: Option<String>) -> Result<()
                 println!("[test] desktop name: {n:?}");
                 got_name = Some(n);
             }
-            Ok(VncEvent::NeedPassword) => {
-                println!("[test] FAIL: server asked for a password but none was supplied");
+            Ok(VncEvent::NeedPassword { needs_username }) => {
+                if needs_username {
+                    println!(
+                        "[test] FAIL: server asked for a username and password but they were not \
+                         both supplied (use -U and -P)"
+                    );
+                } else {
+                    println!("[test] FAIL: server asked for a password but none was supplied");
+                }
                 conn.disconnect();
                 std::process::exit(2);
             }
